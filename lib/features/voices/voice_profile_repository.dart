@@ -218,6 +218,32 @@ class VoiceProfileRepository {
     await _write(profiles.where((item) => item.id != profile.id).toList());
   }
 
+  Future<VoiceProfile> rename(VoiceProfile profile, String newName) async {
+    final cleanName = newName.trim();
+    if (cleanName.isEmpty || cleanName.length > 40) {
+      throw const VoiceProfileException(
+        'Enter a Voice Profile name up to 40 characters.',
+      );
+    }
+    final profiles = await load();
+    final index = profiles.indexWhere((item) => item.id == profile.id);
+    if (index == -1) {
+      throw const VoiceProfileException('Voice Profile not found.');
+    }
+    final updated = VoiceProfile(
+      id: profile.id,
+      name: cleanName,
+      referencePath: profile.referencePath,
+      durationMs: profile.durationMs,
+      sampleRate: profile.sampleRate,
+      createdAt: profile.createdAt,
+    );
+    final next = [...profiles];
+    next[index] = updated;
+    await _write(next);
+    return updated;
+  }
+
   Future<void> discardRecording(String? recordingPath) async {
     if (recordingPath == null) return;
     final file = File(recordingPath);

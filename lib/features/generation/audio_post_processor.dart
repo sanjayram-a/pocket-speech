@@ -4,6 +4,7 @@ import 'dart:typed_data';
 Float32List cleanGeneratedAudioTail(
   Float32List samples, {
   required int sampleRate,
+  int trailingSilenceMs = 0,
 }) {
   if (samples.isEmpty || sampleRate <= 0) return samples;
 
@@ -46,7 +47,14 @@ Float32List cleanGeneratedAudioTail(
     final index = output.length - fadeSamples + i;
     output[index] *= (fadeSamples - i - 1) / fadeSamples;
   }
-  return Float32List.fromList(output);
+
+  // Digital-silence padding gives the device audio sink room to wind down
+  // without an end-of-stream pop during in-app playback.
+  final silenceSamples = sampleRate * trailingSilenceMs ~/ 1000;
+  if (silenceSamples <= 0) return Float32List.fromList(output);
+  final padded = Float32List(output.length + silenceSamples);
+  padded.setRange(0, output.length, output);
+  return padded;
 }
 
 /// Trims low-energy edges from a reference recording. The head is cut but\n/// never faded, and the tail fades out.

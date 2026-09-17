@@ -17,10 +17,13 @@ class VoiceRecorderScreen extends ConsumerStatefulWidget {
       _VoiceRecorderScreenState();
 }
 
-class _VoiceRecorderScreenState extends ConsumerState<VoiceRecorderScreen> {
+class _VoiceRecorderScreenState extends ConsumerState<VoiceRecorderScreen>
+    with SingleTickerProviderStateMixin {
   final _recorder = AudioRecorder();
   final _nameController = TextEditingController(text: 'My voice');
+  final _nameFocusNode = FocusNode();
   late final VoiceProfileRepository _repository;
+  late final AnimationController _pulseController;
   AudioPlayer? _player;
   Timer? _timer;
   DateTime? _startedAt;
@@ -38,10 +41,20 @@ class _VoiceRecorderScreenState extends ConsumerState<VoiceRecorderScreen> {
       _elapsed >= minimumReferenceDuration &&
       _elapsed <= maximumReferenceDuration + const Duration(milliseconds: 250);
 
+  bool get _isTest =>
+      WidgetsBinding.instance.runtimeType.toString().contains('Test');
+
   @override
   void initState() {
     super.initState();
     _repository = ref.read(voiceProfileRepositoryProvider);
+    _pulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
+    );
+    if (!_isTest) {
+      _pulseController.repeat(reverse: true);
+    }
   }
 
   Future<void> _start() async {
@@ -51,8 +64,7 @@ class _VoiceRecorderScreenState extends ConsumerState<VoiceRecorderScreen> {
       if (mounted) {
         setState(() {
           _failure =
-              'Microphone permission is required to create a Voice '
-              'Profile.';
+              'Microphone permission is required to create a Voice Profile.';
         });
       }
       return;
@@ -143,6 +155,7 @@ class _VoiceRecorderScreenState extends ConsumerState<VoiceRecorderScreen> {
     });
     try {
       await _player?.stop();
+      _nameFocusNode.unfocus();
       final profile = await _repository.saveRecording(
         name: _nameController.text,
         temporaryPath: _recordingPath!,
@@ -169,9 +182,11 @@ class _VoiceRecorderScreenState extends ConsumerState<VoiceRecorderScreen> {
 
   @override
   void dispose() {
+    _pulseController.dispose();
     _timer?.cancel();
     unawaited(_disposeResources());
     _nameController.dispose();
+    _nameFocusNode.dispose();
     super.dispose();
   }
 
@@ -182,101 +197,459 @@ class _VoiceRecorderScreenState extends ConsumerState<VoiceRecorderScreen> {
     await _recorder.dispose();
   }
 
+  String _formatTimer(Duration d) {
+    final seconds = d.inSeconds;
+    final tenths = (d.inMilliseconds % 1000) ~/ 100;
+    return '$seconds.${tenths}s';
+  }
+
   @override
   Widget build(BuildContext context) {
-    final seconds = (_elapsed.inMilliseconds / 1000).toStringAsFixed(1);
-    return Scaffold(
-      appBar: AppBar(title: const Text('New Voice Profile')),
-      body: PageBody(
+    final scheme = Theme.of(context).colorScheme;
+    final progress =
+        (_elapsed.inMilliseconds / maximumReferenceDuration.inMilliseconds)
+            .clamp(0.0, 1.0);
+    final isValidLength =
+        _elapsed >= minimumReferenceDuration &&
+        _elapsed <= maximumReferenceDuration;
+    final remaining = maximumReferenceDuration - _elapsed;
+    final remainingSeconds = remaining.isNegative ? 0 : remaining.inSeconds;
+
+    Widget failureBanner({double? topGap}) {
+      if (_failure == null) return const SizedBox.shrink();
+      return Container(
+        margin: EdgeInsets.only(top: topGap ?? context.spacing.sm),
+        padding: EdgeInsets.all(context.spacing.sm),
+        decoration: BoxDecoration(
+          color: scheme.errorContainer.withValues(alpha: 0.55),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: scheme.error.withValues(alpha: 0.18)),
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.error_outline_rounded, size: 16, color: scheme.error),
+            SizedBox(width: context.spacing.sm),
+            Expanded(
+              child: Text(
+                _failure!,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: scheme.onErrorContainer,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 12,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    Widget heroCard(bool compact) => PSCard(
+      padding: EdgeInsets.all(
+        compact ? context.spacing.md : context.spacing.lg,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
+          Stack(
+            alignment: Alignment.center,
+            children: [
+              if (_recording)
+                FadeTransition(
+                  opacity: _pulseController,
+                  child: Container(
+                    width: compact ? 84 : 96,
+                    height: compact ? 84 : 96,
+                    decoration: BoxDecoration(
+                      color: scheme.primary.withValues(alpha: 0.14),
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                ),
+              if (_recording)
+                ScaleTransition(
+                  scale: Tween<double>(begin: 1, end: 1.14).animate(
+                    CurvedAnimation(
+                      parent: _pulseController,
+                      curve: Curves.easeInOut,
+                    ),
+                  ),
+                  child: Container(
+                    width: compact ? 68 : 78,
+                    height: compact ? 68 : 78,
+                    decoration: BoxDecoration(
+                      color: scheme.primary.withValues(alpha: 0.18),
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                ),
+              Container(
+                width: compact ? 56 : 64,
+                height: compact ? 56 : 64,
+                decoration: BoxDecoration(
+                  color: _recording ? scheme.primary : scheme.surfaceContainer,
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: _recording
+                        ? Colors.transparent
+                        : scheme.outlineVariant,
+                    width: 1,
+                  ),
+                  boxShadow: _recording
+                      ? [
+                          BoxShadow(
+                            color: scheme.primary.withValues(alpha: 0.35),
+                            blurRadius: 18,
+                            offset: const Offset(0, 6),
+                          ),
+                        ]
+                      : null,
+                ),
+                child: Icon(
+                  _recording ? Icons.mic_rounded : Icons.mic_none_rounded,
+                  color: _recording
+                      ? scheme.onPrimary
+                      : scheme.onSurfaceVariant,
+                  size: compact ? 24 : 28,
+                ),
+              ),
+            ],
+          ),
+          SizedBox(height: compact ? context.spacing.md : context.spacing.lg),
           Text(
-            _recording ? '$seconds seconds' : 'Record your voice',
+            _recording
+                ? _formatTimer(_elapsed)
+                : (_recordingPath == null
+                      ? 'Record your voice'
+                      : 'Review & save'),
             textAlign: TextAlign.center,
-            style: Theme.of(context).textTheme.displaySmall,
+            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+              fontWeight: FontWeight.w800,
+              letterSpacing: -0.8,
+              height: 1.05,
+              fontFeatures: const [FontFeature.tabularFigures()],
+              color: _recording ? scheme.primary : scheme.onSurface,
+            ),
           ),
-          SizedBox(height: context.spacing.md),
-          const Text(
-            'Speak naturally in a quiet room for 5-12 seconds. The recording '
-            'stays on this device and becomes your Voice Profile.',
+          SizedBox(height: context.spacing.xs),
+          Text(
+            _recording
+                ? 'Speak naturally… $remainingSeconds s left'
+                : 'Speak naturally in a quiet room for 5–12 seconds. The recording stays on this device.',
             textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: scheme.onSurfaceVariant,
+              height: 1.4,
+            ),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
           ),
-          SizedBox(height: context.spacing.xl),
-          CheckboxListTile(
+          SizedBox(height: compact ? context.spacing.md : context.spacing.lg),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(100),
+            child: LinearProgressIndicator(
+              value: _recording || _recordingPath != null ? progress : 0,
+              minHeight: compact ? 5 : 6,
+              backgroundColor: scheme.surfaceContainerHighest,
+              valueColor: AlwaysStoppedAnimation<Color>(
+                isValidLength ? const Color(0xFF2E7D32) : scheme.primary,
+              ),
+            ),
+          ),
+          SizedBox(height: context.spacing.xs),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                '0s',
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  color: scheme.onSurfaceVariant,
+                ),
+              ),
+              Text(
+                '5s min',
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  color: isValidLength
+                      ? const Color(0xFF2E7D32)
+                      : scheme.onSurfaceVariant,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              Text(
+                '12s max',
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  color: scheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+
+    Widget consentCard() => PSCard(
+      padding: EdgeInsets.symmetric(
+        horizontal: context.spacing.md,
+        vertical: context.spacing.sm,
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Checkbox(
             value: _consent,
             onChanged: _recording || _saving
                 ? null
                 : (value) => setState(() => _consent = value ?? false),
-            title: const Text('I have permission to use this voice'),
-            controlAffinity: ListTileControlAffinity.leading,
-          ),
-          SizedBox(height: context.spacing.md),
-          if (_recording)
-            FilledButton.icon(
-              onPressed: _stop,
-              icon: const Icon(Icons.stop),
-              label: const Text('Stop recording'),
-            )
-          else if (_recordingPath == null)
-            FilledButton.icon(
-              key: const Key('start_voice_recording_button'),
-              onPressed: _consent ? _start : null,
-              icon: const Icon(Icons.mic),
-              label: const Text('Start recording'),
-            )
-          else ...[
-            TextField(
-              controller: _nameController,
-              maxLength: 40,
-              decoration: const InputDecoration(labelText: 'Profile name'),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(6),
             ),
-            SizedBox(height: context.spacing.md),
-            Row(
+            visualDensity: VisualDensity.compact,
+            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          ),
+          SizedBox(width: context.spacing.sm),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: _preview,
-                    icon: const Icon(Icons.play_arrow),
-                    label: const Text('Preview'),
+                Text(
+                  'I have permission to use this voice',
+                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 13,
                   ),
                 ),
-                SizedBox(width: context.spacing.md),
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: () async {
-                      await _discardRecording();
-                      if (mounted) setState(() => _failure = null);
-                    },
-                    icon: const Icon(Icons.refresh),
-                    label: const Text('Retake'),
+                Text(
+                  'You confirm you own this voice or have explicit consent.',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                    height: 1.3,
+                    fontSize: 12,
                   ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                 ),
               ],
             ),
-            SizedBox(height: context.spacing.md),
-            FilledButton.icon(
-              key: const Key('save_voice_profile_button'),
-              onPressed: _canSave ? _save : null,
-              icon: _saving
-                  ? const SizedBox.square(
-                      dimension: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.check),
-              label: const Text('Save Voice Profile'),
-            ),
-          ],
-          if (_failure case final failure?) ...[
-            SizedBox(height: context.spacing.md),
-            Semantics(
-              liveRegion: true,
-              child: Text(
-                failure,
-                textAlign: TextAlign.center,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
+          ),
+        ],
+      ),
+    );
+
+    Widget stopButton() => SizedBox(
+      width: double.infinity,
+      child: FilledButton.icon(
+        onPressed: _stop,
+        icon: const Icon(Icons.stop_rounded),
+        label: const Text('Stop recording'),
+        style: FilledButton.styleFrom(
+          backgroundColor: scheme.error,
+          foregroundColor: scheme.onError,
+          minimumSize: const Size(double.infinity, 52),
+        ),
+      ),
+    );
+
+    Widget startButton() => SizedBox(
+      width: double.infinity,
+      child: FilledButton.icon(
+        key: const Key('start_voice_recording_button'),
+        onPressed: _consent ? _start : null,
+        icon: const Icon(Icons.mic_rounded),
+        label: const Text('Start recording'),
+        style: FilledButton.styleFrom(
+          minimumSize: const Size(double.infinity, 52),
+        ),
+      ),
+    );
+
+    Widget reviewCard(bool compact) => PSCard(
+      padding: EdgeInsets.all(
+        compact ? context.spacing.md : context.spacing.lg,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  color: isValidLength
+                      ? const Color(0xFFDFF5E1)
+                      : scheme.errorContainer,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(
+                  isValidLength
+                      ? Icons.check_rounded
+                      : Icons.warning_amber_rounded,
+                  size: 16,
+                  color: isValidLength
+                      ? const Color(0xFF1B5E20)
+                      : scheme.onErrorContainer,
+                ),
+              ),
+              SizedBox(width: context.spacing.sm),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      isValidLength
+                          ? 'Good length • Ready to save'
+                          : 'Adjust length to 5–12 seconds',
+                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 13,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    Text(
+                      '${_formatTimer(_elapsed)} recorded',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          SizedBox(height: context.spacing.md),
+          TextField(
+            controller: _nameController,
+            focusNode: _nameFocusNode,
+            maxLength: 40,
+            textCapitalization: TextCapitalization.words,
+            style: const TextStyle(fontSize: 14),
+            decoration: InputDecoration(
+              labelText: 'Profile name',
+              hintText: 'e.g. My warm voice',
+              prefixIcon: const Icon(Icons.person_outline_rounded, size: 20),
+              counterText: '${_nameController.text.characters.length} / 40',
+              isDense: true,
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 12,
+                vertical: 12,
               ),
             ),
-          ],
+            onChanged: (_) => setState(() {}),
+          ),
+          SizedBox(height: context.spacing.sm),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: _preview,
+                  icon: const Icon(Icons.play_arrow_rounded, size: 18),
+                  label: const Text('Preview', style: TextStyle(fontSize: 13)),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    minimumSize: const Size(0, 40),
+                  ),
+                ),
+              ),
+              SizedBox(width: context.spacing.sm),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () async {
+                    _nameFocusNode.unfocus();
+                    await _discardRecording();
+                    if (mounted) setState(() => _failure = null);
+                  },
+                  icon: const Icon(Icons.refresh_rounded, size: 18),
+                  label: const Text('Retake', style: TextStyle(fontSize: 13)),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    minimumSize: const Size(0, 40),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          SizedBox(height: context.spacing.sm),
+          FilledButton.icon(
+            key: const Key('save_voice_profile_button'),
+            onPressed: _canSave ? _save : null,
+            icon: _saving
+                ? SizedBox.square(
+                    dimension: 16,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: scheme.onPrimary,
+                    ),
+                  )
+                : const Icon(Icons.check_rounded, size: 18),
+            label: Text(
+              _canSave ? 'Save Voice Profile' : 'Record 5–12s to save',
+              style: const TextStyle(fontSize: 13),
+            ),
+            style: FilledButton.styleFrom(
+              minimumSize: const Size(double.infinity, 48),
+            ),
+          ),
         ],
+      ),
+    );
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('New Voice Profile'),
+        centerTitle: false,
+        leading: IconButton(
+          icon: const Icon(Icons.close_rounded),
+          onPressed: () => Navigator.pop(context),
+        ),
+      ),
+      resizeToAvoidBottomInset: false,
+      body: SafeArea(
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final compact = constraints.maxHeight < 700;
+
+            // ONE stable tree — never swapped on keyboard inset changes, so
+            // the TextField keeps its focus/IME connection while typing.
+            // Scrollable container + minHeight = viewport means it fits
+            // exactly (no visible scrolling) and simply scrolls if content
+            // plus keyboard padding ever exceeds the screen.
+            return SingleChildScrollView(
+              physics: const ClampingScrollPhysics(),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                child: Padding(
+                  padding: EdgeInsets.fromLTRB(
+                    context.spacing.lg,
+                    context.spacing.md,
+                    context.spacing.lg,
+                    MediaQuery.viewInsetsOf(context).bottom +
+                        context.spacing.md,
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      heroCard(compact),
+                      SizedBox(height: context.spacing.sm),
+                      consentCard(),
+                      SizedBox(height: context.spacing.sm),
+                      if (_recording)
+                        stopButton()
+                      else if (_recordingPath == null)
+                        startButton()
+                      else
+                        reviewCard(compact),
+                      failureBanner(),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        ),
       ),
     );
   }

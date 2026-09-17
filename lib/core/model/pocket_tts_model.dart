@@ -28,6 +28,33 @@ const pocketTtsModel = PocketTtsModelManifest(
   },
 );
 
+/// Optional high-fidelity replacement for `decoder.int8.onnx`: the FP32 Mimi
+/// decoder published alongside the same engine version. Quantizing the neural
+/// audio decoder dulls high frequencies, so this file upgrades clarity at the
+/// cost of a one-time ~41 MB download.
+const pocketTtsFp32Decoder = PinnedModelFile(
+  name: 'decoder.onnx',
+  uri:
+      'https://huggingface.co/csukuangfj2/sherpa-onnx-pocket-tts-2026-01-26/'
+      'resolve/main/decoder.onnx',
+  bytes: 41478706,
+  sha256: 'f267880fde6c58b17b0a8f3647eaf8dcfad321f833f32d583ebc2fb2d1a15f10',
+);
+
+class PinnedModelFile {
+  const PinnedModelFile({
+    required this.name,
+    required this.uri,
+    required this.bytes,
+    required this.sha256,
+  });
+
+  final String name;
+  final String uri;
+  final int bytes;
+  final String sha256;
+}
+
 class PocketTtsModelManifest {
   const PocketTtsModelManifest({
     required this.id,
@@ -57,6 +84,7 @@ class PocketTtsModelPaths {
   String get lmMain => file('lm_main.int8.onnx');
   String get encoder => file('encoder.onnx');
   String get decoder => file('decoder.int8.onnx');
+  String get fp32Decoder => file(pocketTtsFp32Decoder.name);
   String get textConditioner => file('text_conditioner.onnx');
   String get vocabJson => file('vocab.json');
   String get tokenScoresJson => file('token_scores.json');
@@ -293,6 +321,68 @@ class PocketTtsModelRepository {
     path.join(_modelsDirectory.path, '${manifest.version}.tar.bz2.part'),
   );
 
+  /// True when the engine archive is installed AND the optional FP32 decoder
+  /// is present with its pinned byte length.
+  Future<bool> hasFp32Decoder({
+    PinnedModelFile pin = pocketTtsFp32Decoder,
+  }) async {
+    if (!await _isValidInstallation(_installedDirectory)) return false;
+    final file = File(path.join(_installedDirectory.path, pin.name));
+    return await file.exists() && await file.length() == pin.bytes;
+  }
+
+  /// Downloads and verifies the FP32 decoder into an already-installed engine
+  /// directory. Resumable, integrity-checked, and activated atomically.
+  Future<void> ensureFp32Decoder({
+    void Function(int downloadedBytes, int totalBytes)? onProgress,
+    PinnedModelFile pin = pocketTtsFp32Decoder,
+  }) async {
+    final destinationFile = File(path.join(_installedDirectory.path, pin.name));
+    final stagedFile = File('${destinationFile.path}.part');
+    if (!await _isValidInstallation(_installedDirectory)) {
+      throw const ModelInstallException(
+        'Install the voice engine before adding the high-fidelity decoder.',
+        retryable: true,
+      );
+    }
+    try {
+      await _downloader.download(
+        source: Uri.parse(pin.uri),
+        destination: stagedFile,
+        expectedBytes: pin.bytes,
+        onProgress: (downloaded, total) => onProgress?.call(downloaded, total),
+      );
+      onProgress?.call(pin.bytes, pin.bytes);
+      final digest = await sha256FilePath(stagedFile.path);
+      if (digest != pin.sha256) {
+        await stagedFile.delete();
+        throw const ModelInstallException(
+          'The high-fidelity decoder failed its integrity check. Please '
+          'download it again.',
+          retryable: true,
+        );
+      }
+      if (await destinationFile.exists()) await destinationFile.delete();
+      await stagedFile.rename(destinationFile.path);
+    } on ModelInstallException {
+      rethrow;
+    } on FileSystemException {
+      throw const ModelInstallException(
+        'The high-fidelity decoder could not be written. Check available '
+        'storage.',
+      );
+    }
+  }
+
+  Future<void> removeFp32Decoder({
+    PinnedModelFile pin = pocketTtsFp32Decoder,
+  }) async {
+    final destinationFile = File(path.join(_installedDirectory.path, pin.name));
+    final stagedFile = File('${destinationFile.path}.part');
+    if (await destinationFile.exists()) await destinationFile.delete();
+    if (await stagedFile.exists()) await stagedFile.delete();
+  }
+
   Future<ModelInstallState> inspect() async {
     await _modelsDirectory.create(recursive: true);
     await _removeStaleStaging();
@@ -525,6 +615,11 @@ final pocketTtsModelRepositoryProvider = Provider<PocketTtsModelRepository>((
   ref,
 ) {
   throw StateError('PocketTtsModelRepository must be supplied at bootstrap.');
+});
+
+/// Whether the optional FP32 decoder is installed for the current engine.
+final fp32DecoderProvider = FutureProvider<bool>((ref) {
+  return ref.watch(pocketTtsModelRepositoryProvider).hasFp32Decoder();
 });
 
 class ModelInstallController extends AsyncNotifier<ModelInstallState> {

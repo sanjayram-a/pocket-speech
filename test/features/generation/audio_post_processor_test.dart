@@ -39,4 +39,22 @@ void main() {
     expect(cleaned.length, samples.length);
     expect(cleaned.last, 0);
   });
+
+  test('appends digital silence when trailing silence is requested', () {
+    const sampleRate = 1000;
+    final samples = Float32List.fromList(List<double>.filled(1000, 0.2));
+
+    final cleaned = cleanGeneratedAudioTail(
+      samples,
+      sampleRate: sampleRate,
+      trailingSilenceMs: 80,
+    );
+
+    expect(cleaned.length, samples.length + 80);
+    expect(cleaned.last, 0);
+    // The padded region must be pure digital silence.
+    for (var i = samples.length; i < cleaned.length; i++) {
+      expect(cleaned[i], 0);
+    }
+  });
 }

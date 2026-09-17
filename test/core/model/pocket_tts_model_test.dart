@@ -271,6 +271,114 @@ void main() {
       [7],
     );
   });
+
+  test('fp32 decoder requires an installed engine first', () async {
+    final repository = PocketTtsModelRepository(
+      supportDirectory: supportDirectory,
+      manifest: _manifest(const [1]),
+      downloader: const MemoryDownloader([1]),
+      extractor: const FixtureExtractor(),
+    );
+
+    await expectLater(
+      repository.ensureFp32Decoder(pin: _decoderPin()),
+      throwsA(isA<ModelInstallException>()),
+    );
+  });
+
+  test('fp32 decoder downloads, verifies, and activates atomically', () async {
+    final decoderBytes = List<int>.generate(48, (index) => index + 3);
+    final pin = _decoderPin(decoderBytes);
+    final manifest = _manifest(const [1]);
+    final repository = PocketTtsModelRepository(
+      supportDirectory: supportDirectory,
+      manifest: manifest,
+      downloader: UriMemoryDownloader({
+        manifest.archiveUri: const [1],
+        pin.uri: decoderBytes,
+      }),
+      extractor: const FixtureExtractor(),
+    );
+
+    await repository.install(onState: (_) {});
+    expect(await repository.hasFp32Decoder(pin: pin), isFalse);
+
+    var lastProgress = 0;
+    await repository.ensureFp32Decoder(
+      pin: pin,
+      onProgress: (downloaded, _) => lastProgress = downloaded,
+    );
+
+    expect(lastProgress, decoderBytes.length);
+    expect(await repository.hasFp32Decoder(pin: pin), isTrue);
+    final installedDir = Directory(
+      path.join(supportDirectory.path, 'models', 'test-model', '1'),
+    );
+    expect(
+      await File(path.join(installedDir.path, pin.name)).readAsBytes(),
+      decoderBytes,
+    );
+    expect(
+      await File(path.join(installedDir.path, '${pin.name}.part')).exists(),
+      isFalse,
+    );
+  });
+
+  test('fp32 decoder with a wrong digest is rejected and cleaned up', () async {
+    final pin = _decoderPin(List<int>.filled(16, 5));
+    final repository = PocketTtsModelRepository(
+      supportDirectory: supportDirectory,
+      manifest: _manifest(const [1]),
+      downloader: UriMemoryDownloader({
+        'https://example.invalid/model.tar.bz2': const [1],
+        pin.uri: const [9, 9, 9],
+      }),
+      extractor: const FixtureExtractor(),
+    );
+    await repository.install(onState: (_) {});
+
+    await expectLater(
+      repository.ensureFp32Decoder(pin: pin),
+      throwsA(
+        isA<ModelInstallException>().having(
+          (error) => error.message,
+          'message',
+          contains('integrity'),
+        ),
+      ),
+    );
+
+    final installedDir = Directory(
+      path.join(supportDirectory.path, 'models', 'test-model', '1'),
+    );
+    expect(
+      await File(path.join(installedDir.path, '${pin.name}.part')).exists(),
+      isFalse,
+    );
+    expect(await repository.hasFp32Decoder(pin: pin), isFalse);
+  });
+
+  test('removing the fp32 decoder leaves the engine install intact', () async {
+    final decoderBytes = List<int>.generate(24, (index) => index);
+    final pin = _decoderPin(decoderBytes);
+    final manifest = _manifest(const [1]);
+    final repository = PocketTtsModelRepository(
+      supportDirectory: supportDirectory,
+      manifest: manifest,
+      downloader: UriMemoryDownloader({
+        manifest.archiveUri: const [1],
+        pin.uri: decoderBytes,
+      }),
+      extractor: const FixtureExtractor(),
+    );
+    await repository.install(onState: (_) {});
+    await repository.ensureFp32Decoder(pin: pin);
+
+    await repository.removeFp32Decoder(pin: pin);
+
+    expect(await repository.hasFp32Decoder(pin: pin), isFalse);
+    expect((await repository.inspect()).phase, ModelInstallPhase.ready);
+  });
 }
 
 PocketTtsModelManifest _manifest(List<int> bytes) => PocketTtsModelManifest(
@@ -281,6 +389,36 @@ PocketTtsModelManifest _manifest(List<int> bytes) => PocketTtsModelManifest(
   archiveSha256: sha256.convert(bytes).toString(),
   requiredFiles: const {'model.onnx'},
 );
+
+PinnedModelFile _decoderPin([List<int>? bytes]) {
+  final content = bytes ?? const [1];
+  return PinnedModelFile(
+    name: 'decoder_fp32.onnx',
+    uri: 'https://example.invalid/decoder.onnx',
+    bytes: content.length,
+    sha256: sha256.convert(content).toString(),
+  );
+}
+
+class UriMemoryDownloader implements ModelArchiveDownloader {
+  const UriMemoryDownloader(this.routes);
+
+  final Map<String, List<int>> routes;
+
+  @override
+  Future<void> download({
+    required Uri source,
+    required File destination,
+    required int expectedBytes,
+    required DownloadProgress onProgress,
+  }) async {
+    final bytes = routes[source.toString()];
+    if (bytes == null) throw StateError('No route for $source');
+    await destination.parent.create(recursive: true);
+    await destination.writeAsBytes(bytes, flush: true);
+    onProgress(bytes.length, expectedBytes);
+  }
+}
 
 class MemoryDownloader implements ModelArchiveDownloader {
   const MemoryDownloader(this.bytes);

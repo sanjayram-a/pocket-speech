@@ -133,6 +133,22 @@ class GenerationHistoryRepository {
     await _write(records.where((item) => item.id != record.id).toList());
   }
 
+  /// Deletes every generated WAV and clears history metadata.
+  Future<int> deleteAll() async {
+    final records = await load();
+    for (final record in records) {
+      try {
+        final audio = File(record.audioPath);
+        if (await audio.exists()) await audio.delete();
+      } on FileSystemException {
+        // Continue clearing the rest; orphaned files are reconciled away on
+        // next load anyway.
+      }
+    }
+    await _write(const []);
+    return records.length;
+  }
+
   Future<void> _write(List<GenerationRecord> records) async {
     try {
       await _metadataFile.parent.create(recursive: true);

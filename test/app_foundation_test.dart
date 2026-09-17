@@ -149,6 +149,55 @@ void main() {
     expect(container.read(themePreferenceProvider), ThemeMode.dark);
     expect(preferences.values['theme_mode'], 'dark');
   });
+
+  test('generation quality preferences persist and clamp', () async {
+    final preferences = FakePreferences();
+    final container = ProviderContainer(
+      overrides: [appPreferencesProvider.overrideWithValue(preferences)],
+    );
+    addTearDown(container.dispose);
+
+    expect(
+      container.read(generationTemperatureProvider),
+      defaultGenerationTemperature,
+    );
+    expect(
+      container.read(sentenceChunkCharsProvider),
+      defaultSentenceChunkChars,
+    );
+
+    await container
+        .read(generationTemperatureProvider.notifier)
+        .setTemperature(0.45);
+    await container.read(sentenceChunkCharsProvider.notifier).setChars(80);
+
+    expect(container.read(generationTemperatureProvider), 0.45);
+    expect(container.read(sentenceChunkCharsProvider), 80);
+    expect(preferences.values['generation_temperature'], '0.45');
+    expect(preferences.values['generation_sentence_chars'], '80');
+
+    await container
+        .read(generationTemperatureProvider.notifier)
+        .setTemperature(9.0);
+    await container.read(sentenceChunkCharsProvider.notifier).setChars(-5);
+
+    expect(
+      container.read(generationTemperatureProvider),
+      maxGenerationTemperature,
+    );
+    expect(container.read(sentenceChunkCharsProvider), minSentenceChunkChars);
+
+    final restored = FakePreferences()
+      ..values['generation_temperature'] = '0.45'
+      ..values['generation_sentence_chars'] = '80';
+    final secondContainer = ProviderContainer(
+      overrides: [appPreferencesProvider.overrideWithValue(restored)],
+    );
+    addTearDown(secondContainer.dispose);
+
+    expect(secondContainer.read(generationTemperatureProvider), 0.45);
+    expect(secondContainer.read(sentenceChunkCharsProvider), 80);
+  });
 }
 
 Future<void> _pumpApp(

@@ -17,6 +17,8 @@ class PocketSpeechApp extends ConsumerWidget {
       theme: AppTheme.light(),
       darkTheme: AppTheme.dark(),
       themeMode: themeMode,
+      themeAnimationDuration: const Duration(milliseconds: 420),
+      themeAnimationCurve: Curves.easeInOutCubic,
       home: const AppGate(),
     );
   }

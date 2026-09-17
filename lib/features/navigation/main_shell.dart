@@ -36,46 +36,71 @@ class MainShell extends ConsumerWidget {
     final destination = ref.watch(mainDestinationProvider);
     final scheme = Theme.of(context).colorScheme;
     return Scaffold(
+      extendBody: true,
       body: IndexedStack(index: destination.index, children: _screens),
-      bottomNavigationBar: DecoratedBox(
-        decoration: BoxDecoration(
-          color: scheme.surface,
-          borderRadius: context.shapes.navBar,
-          boxShadow: [
-            BoxShadow(
-              color: scheme.shadow.withValues(alpha: 0.10),
-              blurRadius: 18,
-              offset: const Offset(0, -6),
+      bottomNavigationBar: SafeArea(
+        top: false,
+        child: Container(
+          margin: EdgeInsets.fromLTRB(
+            context.spacing.md,
+            0,
+            context.spacing.md,
+            context.spacing.sm,
+          ),
+          decoration: BoxDecoration(
+            color: scheme.surface,
+            borderRadius: BorderRadius.circular(28),
+            border: Border.all(color: scheme.outlineVariant, width: 1),
+            boxShadow: [
+              BoxShadow(
+                color: scheme.shadow.withValues(
+                  alpha: scheme.brightness == Brightness.light ? 0.10 : 0.28,
+                ),
+                blurRadius: 28,
+                offset: const Offset(0, 10),
+              ),
+              BoxShadow(
+                color: scheme.shadow.withValues(
+                  alpha: scheme.brightness == Brightness.light ? 0.06 : 0.16,
+                ),
+                blurRadius: 4,
+                offset: const Offset(0, 1),
+              ),
+            ],
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(28),
+            child: NavigationBar(
+              selectedIndex: destination.index,
+              onDestinationSelected: ref
+                  .read(mainDestinationProvider.notifier)
+                  .select,
+              backgroundColor: Colors.transparent,
+              height: 72,
+              destinations: const [
+                NavigationDestination(
+                  icon: Icon(Icons.graphic_eq_outlined),
+                  selectedIcon: Icon(Icons.graphic_eq),
+                  label: 'Generate',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.record_voice_over_outlined),
+                  selectedIcon: Icon(Icons.record_voice_over),
+                  label: 'Voices',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.history_outlined),
+                  selectedIcon: Icon(Icons.history),
+                  label: 'History',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.tune_outlined),
+                  selectedIcon: Icon(Icons.tune),
+                  label: 'Settings',
+                ),
+              ],
             ),
-          ],
-        ),
-        child: NavigationBar(
-          selectedIndex: destination.index,
-          onDestinationSelected: ref
-              .read(mainDestinationProvider.notifier)
-              .select,
-          destinations: const [
-            NavigationDestination(
-              icon: Icon(Icons.graphic_eq_outlined),
-              selectedIcon: Icon(Icons.graphic_eq),
-              label: 'Generate',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.record_voice_over_outlined),
-              selectedIcon: Icon(Icons.record_voice_over),
-              label: 'Voices',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.history_outlined),
-              selectedIcon: Icon(Icons.history),
-              label: 'History',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.tune_outlined),
-              selectedIcon: Icon(Icons.tune),
-              label: 'Settings',
-            ),
-          ],
+          ),
         ),
       ),
     );

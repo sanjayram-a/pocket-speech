@@ -5,6 +5,7 @@ import 'dart:isolate';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa;
 
+import '../../app/app_controllers.dart';
 import '../../core/model/pocket_tts_model.dart';
 import 'audio_post_processor.dart';
 
@@ -39,6 +40,7 @@ class LocalTtsService {
   Isolate? _isolate;
   SendPort? _commands;
   String? _modelDirectory;
+  String? _decoderPath;
   bool _generating = false;
 
   Future<LocalGenerationResult> generate({
@@ -46,6 +48,10 @@ class LocalTtsService {
     required String text,
     required String referenceAudioPath,
     required String outputPath,
+    double speed = 1.0,
+    int numSteps = 5,
+    double temperature = defaultGenerationTemperature,
+    int sentenceChunkChars = defaultSentenceChunkChars,
     void Function(double progress)? onProgress,
   }) async {
     if (_generating) {
@@ -68,6 +74,10 @@ class LocalTtsService {
         'text': text,
         'reference': referenceAudioPath,
         'output': outputPath,
+        'speed': speed.clamp(0.25, 4.0).toDouble(),
+        'numSteps': numSteps.clamp(1, 16),
+        'temperature': temperature.clamp(0.1, 1.5).toDouble(),
+        'sentenceChunkChars': sentenceChunkChars.clamp(20, 500),
       });
 
       await for (final Object? message in replies) {
@@ -96,19 +106,31 @@ class LocalTtsService {
   }
 
   Future<void> _start(PocketTtsModelPaths model) async {
-    if (_commands != null && _modelDirectory == model.directory) return;
+    // Prefer the FP32 decoder whenever it has been downloaded; the isolate
+    // bakes the decoder path into its engine config, so a decoder change
+    // must recreate it.
+    final decoderPath = await File(model.fp32Decoder).exists()
+        ? model.fp32Decoder
+        : model.decoder;
+    if (_commands != null &&
+        _modelDirectory == model.directory &&
+        _decoderPath == decoderPath) {
+      return;
+    }
     await dispose();
 
     final ready = ReceivePort();
     _isolate = await Isolate.spawn(_localTtsWorker, {
       'reply': ready.sendPort,
       'modelDirectory': model.directory,
+      'decoderPath': decoderPath,
     }, debugName: 'pocket-tts-worker');
     final response = await ready.first;
     ready.close();
     if (response is SendPort) {
       _commands = response;
       _modelDirectory = model.directory;
+      _decoderPath = decoderPath;
       return;
     }
     _isolate?.kill(priority: Isolate.immediate);
@@ -131,6 +153,7 @@ class LocalTtsService {
     _isolate = null;
     _commands = null;
     _modelDirectory = null;
+    _decoderPath = null;
   }
 }
 
@@ -154,7 +177,7 @@ Future<void> _localTtsWorker(Map<Object?, Object?> startup) async {
             lmFlow: model.lmFlow,
             lmMain: model.lmMain,
             encoder: model.encoder,
-            decoder: model.decoder,
+            decoder: startup['decoderPath']! as String,
             textConditioner: model.textConditioner,
             vocabJson: model.vocabJson,
             tokenScoresJson: model.tokenScoresJson,
@@ -191,13 +214,25 @@ Future<void> _localTtsWorker(Map<Object?, Object?> startup) async {
         throw const LocalTtsException('The reference WAV could not be read.');
       }
       final stopwatch = Stopwatch()..start();
+      final rawSpeed = rawMessage['speed'];
+      final rawSteps = rawMessage['numSteps'];
+      final rawTemperature = rawMessage['temperature'];
+      final rawSentenceChunkChars = rawMessage['sentenceChunkChars'];
+      final extra = <String, Object>{'max_reference_audio_len': 12};
+      if (rawTemperature is num) {
+        extra['temperature'] = rawTemperature.toDouble();
+      }
+      if (rawSentenceChunkChars is int) {
+        extra['max_char_in_sentence'] = rawSentenceChunkChars;
+      }
       final audio = tts.generateWithConfig(
         text: rawMessage['text']! as String,
         config: sherpa.OfflineTtsGenerationConfig(
           referenceAudio: reference.samples,
           referenceSampleRate: reference.sampleRate,
-          numSteps: 5,
-          extra: const {'max_reference_audio_len': 12},
+          numSteps: rawSteps is int ? rawSteps.clamp(1, 16) : 5,
+          speed: rawSpeed is num ? rawSpeed.toDouble().clamp(0.25, 4.0) : 1.0,
+          extra: extra,
         ),
         onProgress: (samples, progress) {
           response.send({'type': 'progress', 'progress': progress});
@@ -208,6 +243,7 @@ Future<void> _localTtsWorker(Map<Object?, Object?> startup) async {
       final cleanedSamples = cleanGeneratedAudioTail(
         audio.samples,
         sampleRate: audio.sampleRate,
+        trailingSilenceMs: 80,
       );
       final output = rawMessage['output']! as String;
       final written = sherpa.writeWave(

@@ -23,6 +23,14 @@ Guidance and privacy > Built-in voices) and in this file.
 
 ## Model
 
-- Runtime: sherpa-onnx (Apache-2.0)
-- Pocket TTS INT8 model bundle: license included in the upstream archive
-  (`sherpa-onnx-pocket-tts-int8-2026-01-26`, kyutai/pocket-tts weights).
+- Pocket TTS model weights: © Kyutai, licensed
+  [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)
+  ([kyutai/pocket-tts](https://huggingface.co/kyutai/pocket-tts)). Used as
+  published by the sherpa-onnx project (`sherpa-onnx-pocket-tts-int8-2026-01-26`
+  bundle); the optional high-fidelity decoder is the unquantized decoder from
+  the same model release.
+- Runtime: [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)
+  (Apache-2.0).
+
+CC BY 4.0 attribution for the model weights is provided here and in-app
+(Settings > Guidance and privacy).
