@@ -25,37 +25,26 @@
 migrate_working_dir/
 **/doc/api/
 **/ios/Flutter/.last_build_id
-app/build/
-app/coverage/
+build/
+coverage/
 app.*.symbols
 app.*.map.json
-app/android/app/debug/
-app/android/app/profile/
-app/android/app/release/
+android/app/debug/
+android/app/profile/
+android/app/release/
 
 # Android
-app/android/.gradle/
-app/android/**/.cxx/
-app/android/captures/
-app/android/**/gradle-wrapper.jar
-app/android/gradlew
-app/android/gradlew.bat
-app/android/local.properties
-app/android/**/GeneratedPluginRegistrant.java
-app/android/**/key.properties
-app/android/**/*.keystore
-app/android/**/*.jks
-
-# Python
-.venv/
-.pytest_cache/
-.ruff_cache/
-__pycache__/
-.coverage
-htmlcov/
-dist/
-build/
-*.egg-info/
+android/.gradle/
+android/**/.cxx/
+android/captures/
+android/**/gradle-wrapper.jar
+android/gradlew
+android/gradlew.bat
+android/local.properties
+android/**/GeneratedPluginRegistrant.java
+android/**/key.properties
+android/**/*.keystore
+android/**/*.jks
 
 # Local environment
 .env

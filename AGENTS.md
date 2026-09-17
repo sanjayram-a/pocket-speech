@@ -2,46 +2,100 @@
 
 ## Product Scope
 
-Pocket Speech is an Android-first Flutter app for cloning a user's voice and generating speech with Kyutai Pocket TTS. Voice profiles and generated audio remain on-device; Modal performs temporary inference, and Neon stores only identity, quota, and generation metadata.
+Pocket Speech is an Android-first Flutter app for text-to-speech with zero-shot
+voice cloning, running entirely on-device with the sherpa-onnx Pocket TTS INT8
+model. Users can generate speech with built-in native Pocket TTS voices or with
+a personal Voice Profile recorded from their own voice. There is no account,
+no backend, and no telemetry; everything stays on the device.
+
+## Repository Layout
+
+The Flutter app lives at the repository root — there is no `app/` nesting and
+no backend:
+
+```
+lib/           Dart source, organized by feature
+  app/         Bootstrap, theme tokens, global controllers (Riverpod)
+  core/        Model installer, audio helpers, shared primitives
+  features/    generation, voices, history, model, settings, navigation,
+               onboarding
+test/          Unit and widget tests mirroring lib/
+android/       Android host project
+```
 
 ## MVP Boundaries
 
-- Target Android with Flutter and Dart null safety.
-- Keep cloned voice profiles and generated audio in app-local storage.
-- Do not permanently retain reference recordings, voice profiles, generated audio, or generated text on the backend.
-- Require Google sign-in before product use, authenticate every inference request, and derive the user ID from the verified token.
-- Enforce active-voice, monthly voice-creation, usage, request-size, and concurrency limits on the server.
-- Resolve limits from server-owned plan policy so Free and future Pro quotas can change without a client release.
-- Measure quota using successfully generated audio duration.
-- Keep billing, cloud file storage, cross-device sync, queues, Redis, and additional inference providers out of the MVP.
+- Target Android only, with Dart null safety.
+- Reference recordings, Voice Profiles, built-in voices, and generated audio
+  live in app-private storage (`getApplicationSupportDirectory`).
+- Generated input text is transient: never persisted to metadata or history.
+- No authentication. Network is used only for the one-time downloads below.
+- The voice engine (`sherpa-onnx-pocket-tts-int8-2026-01-26`) is downloaded on
+  first use, never bundled: resume interrupted downloads via HTTP range
+  requests, verify pinned size + SHA-256, extract through a resumable staging
+  directory, and atomically activate only after every required file exists.
+- Built-in voices (Alba, Javert, Bill Boerst, Caro Davy, Fantine) are the
+  native `pocket-tts` voice IDs; they download silently from
+  `kyutai/tts-voices` with per-file size + SHA-256 pinning. Marius was removed.
+  Never bundle voices in the APK or add non-commercially licensed ones
+  (Expresso/EARS are CC BY-NC — excluded). Attribution lives in Settings and
+  `LICENSES.md`.
+- Keep billing, cloud storage, sync, quotas, queues, analytics, and additional
+  inference providers out of scope.
 
 ## Architecture
 
-- Keep the Flutter app in `app/`, the Modal/FastAPI service in `backend/`, and shared API fixtures in `contracts/`.
-- Organize Flutter code by feature with explicit presentation, application, domain, and data boundaries where they provide value; avoid ceremonial layers.
-- Scope local files and metadata to the authenticated Firebase identity so account switching cannot expose another user's content.
-- Treat the local metadata store and filesystem as one consistency boundary. Handle partial writes and deletion failures explicitly.
-- Keep HTTP contracts typed and map transport errors into domain failures before they reach widgets.
-- Bind every local voice-state file to its owner, server voice ID, model version, and byte hash with a server-signed manifest; verify it before inference.
-- Model asynchronous UI with explicit idle, loading, success, and failure states.
-- Define all colors, typography, shapes, spacing, and component styles in one global Material 3 theme; feature widgets must not hard-code presentation colors.
-- Support system-default, light, and dark theme modes.
-- Use composition, const widgets, accessible semantics, and minimum 48dp touch targets.
-- Profile animations on physical Android devices and fix jank before release; respect reduced-motion accessibility settings.
-- Never log tokens, generated text, voice-state bytes, reference recordings, or generated audio.
+- State management is Riverpod 3 (`Notifier` / `AsyncNotifier`); repositories
+  are plain classes injected at bootstrap in `main.dart` via provider
+  overrides.
+- sherpa-onnx generation runs in a dedicated long-lived isolate that owns the
+  native engine; it communicates over typed maps on `SendPort`s. Recreate the
+  isolate when sensitive content is deleted or the model changes.
+- Isolate boundaries carry only sendable data (strings, numbers, records).
+  Capture locals explicitly in `Isolate.run` closures — implicit `this`
+  capture has caused `ArgumentError: object is unsendable`.
+- Model installation is recoverable: partial `.part` archives auto-resume, a
+  decompressed sidecar tar with a completion marker skips redoing bzip2 after
+  process death, extraction retries three times, and real failure causes are
+  shown in the UI plus persisted to `last_install_error.txt`.
+- Audio post-processing (`audio_post_processor.dart`): generated output gets a
+  conservative trailing-hiss trim and tail fade-out only — never trim or fade
+  the start of generated audio or references' heads beyond edge-noise removal;
+  the first phoneme must play untouched.
+- History metadata lives in a single JSON file with atomic tmp-rename writes;
+  orphaned WAVs are reconciled back into history on load, deduplicated by
+  path.
+- Exports use the Storage Access Framework (`Download location` setting);
+  canonical copies always stay app-private.
+- Map all failures into typed exceptions with user-facing messages before they
+  reach widgets; show real diagnostic detail for install errors.
+- Define all colors, typography, shapes, spacing in `app_theme.dart`; feature
+  widgets consume semantic tokens (`context.spacing`, `context.shapes`) and
+  never hard-code colors. Support system/light/dark modes.
+- Use composition, const widgets, accessible semantics, 48dp touch targets.
+- The bottom nav bar has curved top corners (`AppShapes.navBar`, radius 28).
 
 ## Quality Gates
 
-- Format and statically analyze Dart code.
-- Unit-test Plan Policy, quota, repository, and failure-mapping logic.
+Run from the repo root before handing off any change:
+
+```powershell
+dart format lib test
+flutter analyze
+flutter test
+flutter build apk --debug
+```
+
+- Unit-test model download/verification/recovery, builtin-voice integrity,
+  repositories, WAV parsing, and audio post-processing.
 - Widget-test loading, error, empty, and success states.
-- Integration-test onboarding, Google sign-in, cloning, monthly clone quota, generation, persistence, playback, export, settings, deletion, and quota rejection.
-- Golden-test core screens in light and dark themes at representative phone sizes and large text scales.
-- Verify critical flows on a physical Android device, including interrupted uploads/downloads, process death, low storage, and denied permissions.
+- Verify install, cloning, generation, playback, export, and deletion flows on
+  a physical Android device (interrupted downloads, process death, low
+  storage, denied mic permission).
 
 ## Working Agreements
 
-- Keep changes small and MVP-focused.
-- Add dependencies only for a concrete requirement.
-- Never trust client-supplied identity, plan, quota, duration, or subscription state.
-- Update product/domain documentation when terminology or architectural decisions change.
+- Keep changes small and focused; add dependencies only for a concrete need.
+- Never report a model or voice installed before its integrity checks pass.
+- Never log generated text, reference recordings, or generated audio bytes.
+- When terminology changes, update this file and `README.md` together.
